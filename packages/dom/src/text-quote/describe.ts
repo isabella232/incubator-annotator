@@ -18,10 +18,11 @@
  * under the License.
  */
 
-import seek from 'dom-seek';
 import type { TextQuoteSelector } from '@annotator/selector';
 
 import { ownerDocument } from '../owner-document';
+import { ChunkRange, Chunk, rangeToTextChunks } from '../text-iterator';
+import { abstractTextQuoteSelectorMatcher } from './match';
 
 export async function describeTextQuote(
   range: Range,
@@ -41,151 +42,113 @@ export async function describeTextQuote(
   if (range.compareBoundaryPoints(Range.END_TO_END, scope) === 1)
     range.setEnd(scope.endContainer, scope.endOffset);
 
+  return await abstractDescribeTextQuote(
+    {
+      startChunk: range.startContainer,
+      startIndex: range.startOffset,
+      endChunk: range.endContainer,
+      endIndex: range.endOffset,
+    },
+    rangeToTextChunks(scope),
+  );
+}
+
+async function abstractDescribeTextQuote(
+  target: ChunkRange<any>,
+  scope: AsyncIterable<Chunk>,
+): Promise<TextQuoteSelector> {
+  const exact = readChunks(target);
+  const { prefix, suffix } = await calculateContextForDisambiguation(target, scope);
   return {
     type: 'TextQuoteSelector',
-    exact: range.toString(),
-    ...calculateContextForDisambiguation(range, scope),
+    exact,
+    prefix,
+    suffix,
   };
 }
 
-function calculateContextForDisambiguation(
-  range: Range,
-  scope: Range,
-): { prefix?: string; suffix?: string } {
-  const exactText = range.toString();
-  const scopeText = scope.toString();
-  const targetStartIndex = getRangeTextPosition(range, scope);
-  const targetEndIndex = targetStartIndex + exactText.length;
+async function calculateContextForDisambiguation(
+  target: ChunkRange<any>,
+  scope: AsyncIterable<Chunk>,
+): Promise<{ prefix: string; suffix: string }> {
+  const exact = target.toString();
+  let prefix = '';
+  let suffix = '';
 
-  // Find all matches of the text in the scope.
-  const stringMatches: number[] = [];
-  let fromIndex = 0;
-  while (fromIndex <= scopeText.length) {
-    const matchIndex = scopeText.indexOf(exactText, fromIndex);
-    if (matchIndex === -1) break;
-    stringMatches.push(matchIndex);
-    fromIndex = matchIndex + 1;
-  }
+  while (true) {
+    const tentativeSelector: TextQuoteSelector = {
+      type: 'TextQuoteSelector',
+      exact,
+      prefix,
+      suffix,
+    }
+    const matches = abstractTextQuoteSelectorMatcher(tentativeSelector)(scope);
+    const nextMatch = await matches.next();
+    if (nextMatch.done) break;
+    const match = nextMatch.value;
 
-  // Count for each undesired match the required prefix and suffix lengths, such that either of them
-  // would have invalidated the match.
-  const affixLengthPairs: Array<[number, number]> = [];
-  for (const matchStartIndex of stringMatches) {
-    const matchEndIndex = matchStartIndex + exactText.length;
+    if (
+      match.startChunk === target.startChunk
+      && match.endChunk === target.endChunk
+      && match.startIndex === target.startIndex
+      && match.endIndex === target.endIndex
+    ) {
+      // This match is the intended one, ignore it.
+      continue;
+    }
 
-    // Skip the found match if it is the actual target.
-    if (matchStartIndex === targetStartIndex) continue;
-
-    // Count how many characters before & after them the false match and target have in common.
-    const sufficientPrefixLength = charactersNeededToBeUnique(
-      scopeText.substring(0, targetStartIndex),
-      scopeText.substring(0, matchStartIndex),
+    const sufficientPrefix = charactersNeededToBeUnique(
+      match,
+      target,
       true,
     );
-    const sufficientSuffixLength = charactersNeededToBeUnique(
-      scopeText.substring(targetEndIndex),
-      scopeText.substring(matchEndIndex),
+    const sufficientSuffix = charactersNeededToBeUnique(
+      match,
+      target,
       false,
     );
-    affixLengthPairs.push([sufficientPrefixLength, sufficientSuffixLength]);
+
+    // Use either the prefix or suffix, whichever is shortest.
+    if (sufficientPrefix !== undefined && (sufficientSuffix === undefined || sufficientPrefix.length <= sufficientSuffix.length))
+      prefix = sufficientPrefix;
+    else if (sufficientSuffix !== undefined)
+      suffix = sufficientSuffix;
+    else
+      throw new Error('Target cannot be disambiguated; how could that have happened‽');
   }
 
-  // Find the prefix and suffix that would invalidate all mismatches, using the minimal characters
-  // for prefix and suffix combined.
-  const [prefixLength, suffixLength] = minimalSolution(affixLengthPairs);
-  const prefix = scopeText.substring(
-    targetStartIndex - prefixLength,
-    targetStartIndex,
-  );
-  const suffix = scopeText.substring(
-    targetEndIndex,
-    targetEndIndex + suffixLength,
-  );
   return { prefix, suffix };
 }
 
 function charactersNeededToBeUnique(
-  target: string,
-  impostor: string,
-  reverse = false,
-) {
-  // Count how many characters the two strings have in common.
-  let overlap = 0;
-  const charAt = (s: string, i: number) =>
-    reverse ? s[s.length - 1 - i] : s[overlap];
-  while (
-    overlap < target.length &&
-    charAt(target, overlap) === charAt(impostor, overlap)
-  )
-    overlap++;
-  if (overlap === target.length) return Infinity;
-  // (no substring of target can make it distinguishable from its impostor)
-  else return overlap + 1;
+  match: ChunkRange<any>,
+  target: ChunkRange<any>,
+  reverse: boolean,
+): string | undefined {
+  // TODO. How?
 }
 
-function minimalSolution(
-  requirements: Array<[number, number]>,
-): [number, number] {
-  // Ensure we try solutions with an empty prefix or suffix.
-  requirements.push([0, 0]);
+function readChunks(
+  {
+    startChunk,
+    startIndex,
+    endChunk,
+    endIndex,
+  }: ChunkRange<Chunk>
+): string {
+  if (startChunk === endChunk)
+    return startChunk.toString().substring(startIndex, endIndex);
 
-  // Build all the pairs and order them by their sums.
-  const pairs = requirements.flatMap((l) =>
-    requirements.map<[number, number]>((r) => [l[0], r[1]]),
-  );
-  pairs.sort((a, b) => a[0] + a[1] - (b[0] + b[1]));
-
-  // Find the first pair that satisfies every requirement.
-  for (const pair of pairs) {
-    const [p0, p1] = pair;
-    if (requirements.every(([r0, r1]) => r0 <= p0 || r1 <= p1)) {
-      return pair;
-    }
+  let text = startChunk.toString().substring(startIndex);
+  let curChunk = startChunk;
+  while (curChunk && curChunk !== endChunk) {
+    curChunk = nextChunk(curChunk);
+    text += curChunk.toString();
   }
-
-  // Return the largest pairing (unreachable).
-  return pairs[pairs.length - 1];
+  text += endChunk.toString().substring(0, endIndex);
+  return text;
 }
 
-// Get the index of the first character of range within the text of scope.
-function getRangeTextPosition(range: Range, scope: Range): number {
-  const iter = ownerDocument(scope).createNodeIterator(
-    scope.commonAncestorContainer,
-    NodeFilter.SHOW_TEXT,
-    {
-      acceptNode(node: Text) {
-        // Only reveal nodes within the range
-        return scope.intersectsNode(node)
-          ? NodeFilter.FILTER_ACCEPT
-          : NodeFilter.FILTER_REJECT;
-      },
-    },
-  );
-  const scopeOffset = isTextNode(scope.startContainer) ? scope.startOffset : 0;
-  if (isTextNode(range.startContainer))
-    return seek(iter, range.startContainer) + range.startOffset - scopeOffset;
-  else return seek(iter, firstTextNodeInRange(range)) - scopeOffset;
-}
-
-function firstTextNodeInRange(range: Range): Text {
-  // Find the first text node inside the range.
-  const iter = ownerDocument(range).createNodeIterator(
-    range.commonAncestorContainer,
-    NodeFilter.SHOW_TEXT,
-    {
-      acceptNode(node: Text) {
-        // Only reveal nodes within the range; and skip any empty text nodes.
-        return range.intersectsNode(node) && node.length > 0
-          ? NodeFilter.FILTER_ACCEPT
-          : NodeFilter.FILTER_REJECT;
-      },
-    },
-  );
-  const node = iter.nextNode() as Text | null;
-  if (node === null) throw new Error('Range contains no text nodes');
-  return node;
-}
-
-function isTextNode(node: Node): node is Text {
-  return node.nodeType === Node.TEXT_NODE;
+function nextChunk(chunk: Chunk): Chunk {
+  // TODO. How?
 }
