@@ -45,7 +45,7 @@ export interface Chunk {
   toString(): string;
 }
 
-export interface ChunkRange<TChunk> {
+export interface ChunkRange<TChunk extends Chunk> {
   startChunk: TChunk;
   startIndex: number;
   endChunk: TChunk;

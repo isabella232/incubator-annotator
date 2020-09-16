@@ -24,7 +24,7 @@ import { rangeToTextChunks, Chunk, TextRange, ChunkRange } from '../text-iterato
 
 export function createTextQuoteSelectorMatcher(
   selector: TextQuoteSelector,
-): (scope: Range) => AsyncGenerator<TextRange, void, void> {
+): (scope: Range) => AsyncIterable<TextRange> {
   const abstractMatcher = abstractTextQuoteSelectorMatcher(selector);
   return async function* matchAll(scope) {
     // Turn the scope into a stream of ranges, each wrapping exactly one text node. We wrap it in
@@ -46,7 +46,7 @@ export function createTextQuoteSelectorMatcher(
 
 export function abstractTextQuoteSelectorMatcher(
   selector: TextQuoteSelector,
-): <TChunk extends Chunk>(textChunks: AsyncIterable<TChunk>) => AsyncGenerator<ChunkRange<TChunk>, void, void> {
+): <TChunk extends Chunk>(textChunks: AsyncIterable<TChunk>) => AsyncIterable<ChunkRange<TChunk>> {
   return async function* matchAll<TChunk extends Chunk>(textChunks: AsyncIterable<TChunk>) {
     const exact = selector.exact;
     const prefix = selector.prefix || '';
