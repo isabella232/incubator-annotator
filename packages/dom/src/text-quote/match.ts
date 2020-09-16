@@ -20,7 +20,7 @@
 
 import type { TextQuoteSelector } from '@annotator/selector';
 
-import { chunkRange, Chunk, TextRange } from '../text-iterator';
+import { rangeToTextChunks, Chunk, TextRange, ChunkRange } from '../text-iterator';
 
 export function createTextQuoteSelectorMatcher(
   selector: TextQuoteSelector,
@@ -30,7 +30,7 @@ export function createTextQuoteSelectorMatcher(
     // Turn the scope into a stream of ranges, each wrapping exactly one text node. We wrap it in
     // a range such that the first and last text node can be partially included. Could be changed
     // to e.g. be an object { node: Text, startOffset, endOffset }.
-    const textChunks = chunkRange(scope);
+    const textChunks = rangeToTextChunks(scope);
 
     for await (const abstractMatch of abstractMatcher(textChunks)) {
       const match = document.createRange() as TextRange;
@@ -44,16 +44,9 @@ export function createTextQuoteSelectorMatcher(
   }
 }
 
-interface AbstractRange<TChunk> {
-  startChunk: TChunk;
-  startIndex: number;
-  endChunk: TChunk;
-  endIndex: number;
-}
-
 export function abstractTextQuoteSelectorMatcher(
   selector: TextQuoteSelector,
-): <TChunk extends Chunk>(textChunks: AsyncIterable<TChunk>) => AsyncGenerator<AbstractRange<TChunk>, void, void> {
+): <TChunk extends Chunk>(textChunks: AsyncIterable<TChunk>) => AsyncGenerator<ChunkRange<TChunk>, void, void> {
   return async function* matchAll<TChunk extends Chunk>(textChunks: AsyncIterable<TChunk>) {
     const exact = selector.exact;
     const prefix = selector.prefix || '';

@@ -45,8 +45,15 @@ export interface Chunk {
   toString(): string;
 }
 
+export interface ChunkRange<TChunk> {
+  startChunk: TChunk;
+  startIndex: number;
+  endChunk: TChunk;
+  endIndex: number;
+}
+
 // Yields ranges whose start and end nodes are both the *same* Text node.
-export async function* chunkRange(scope: Range): AsyncIterable<TextRange> {
+export async function* rangeToTextChunks(scope: Range): AsyncIterable<TextRange> {
   const document = ownerDocument(scope);
 
   const iter = document.createNodeIterator(
