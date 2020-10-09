@@ -9,7 +9,7 @@ const TEXT_NODE = 3
 
 export default function seek(iter: NodeIterator, where: number | Text): number {
   if (iter.whatToShow !== SHOW_TEXT) {
-    let error
+    let error: Error & { code?: number }
 
     // istanbul ignore next
     try {
@@ -25,7 +25,7 @@ export default function seek(iter: NodeIterator, where: number | Text): number {
   }
 
   let count = 0
-  let node = iter.referenceNode
+  let node: Node | null = iter.referenceNode
   let predicates = null
 
   if (isInteger(where)) {
@@ -48,7 +48,7 @@ export default function seek(iter: NodeIterator, where: number | Text): number {
       throw new RangeError(E_END)
     }
 
-    count += node.nodeValue.length
+    count += (node as Text).data.length
   }
 
   if (iter.nextNode()) {
@@ -62,7 +62,7 @@ export default function seek(iter: NodeIterator, where: number | Text): number {
       throw new RangeError(E_END)
     }
 
-    count -= node.nodeValue.length
+    count -= (node as Text).data.length
   }
 
   if (!isText(iter.referenceNode)) {
@@ -73,17 +73,17 @@ export default function seek(iter: NodeIterator, where: number | Text): number {
 }
 
 
-function isInteger(n) {
+function isInteger(n: any): n is number {
   if (typeof n !== 'number') return false;
   return isFinite(n) && Math.floor(n) === n;
 }
 
 
-function isText(node) {
+function isText(node: Node): node is Text {
   return node.nodeType === TEXT_NODE
 }
 
 
-function before(ref, node) {
-  return ref.compareDocumentPosition(node) & DOCUMENT_POSITION_PRECEDING
+function before(ref: Node, node: Node): boolean {
+  return !!(ref.compareDocumentPosition(node) & DOCUMENT_POSITION_PRECEDING)
 }
