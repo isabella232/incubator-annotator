@@ -20,7 +20,7 @@
 
 import type { Matcher, TextPositionSelector } from '@annotator/selector';
 import { ownerDocument } from '../owner-document';
-import seek from '../seek';
+import { Seeker } from '../seek';
 
 export function createTextPositionSelectorMatcher(
   selector: TextPositionSelector,
@@ -31,18 +31,7 @@ export function createTextPositionSelectorMatcher(
 
     const { start, end } = selector;
 
-    const iter = document.createNodeIterator(
-      scope.commonAncestorContainer,
-      NodeFilter.SHOW_TEXT,
-      {
-        acceptNode(node: Text) {
-          // Only reveal nodes within the range; and skip any empty text nodes.
-          return scope.intersectsNode(node) && node.length > 0
-            ? NodeFilter.FILTER_ACCEPT
-            : NodeFilter.FILTER_REJECT;
-        },
-      },
-    );
+    const seeker = new Seeker(scope);
 
     // The index of the first character of iter.referenceNode inside the text.
     let referenceNodeIndex = isTextNode(scope.startContainer)
@@ -57,12 +46,12 @@ export function createTextPositionSelectorMatcher(
     const match = document.createRange();
 
     // Seek to the start of the match, make the range start there.
-    referenceNodeIndex += seek(iter, matchStartIndex - referenceNodeIndex);
-    match.setStart(iter.referenceNode, matchStartIndex - referenceNodeIndex);
+    referenceNodeIndex += seeker.seek(matchStartIndex - referenceNodeIndex);
+    match.setStart(seeker.getCurrentNode(), matchStartIndex - referenceNodeIndex);
 
     // Seek to the end of the match, make the range end there.
-    referenceNodeIndex += seek(iter, matchEndIndex - referenceNodeIndex);
-    match.setEnd(iter.referenceNode, matchEndIndex - referenceNodeIndex);
+    referenceNodeIndex += seeker.seek(matchEndIndex - referenceNodeIndex);
+    match.setEnd(seeker.getCurrentNode(), matchEndIndex - referenceNodeIndex);
 
     // Yield the match.
     yield match;

@@ -1,75 +1,81 @@
+import { ownerDocument } from "./owner-document";
+
 const E_END = 'Iterator exhausted before seek ended.';
-const E_SHOW = 'Argument 1 of seek must use filter NodeFilter.SHOW_TEXT.';
-const E_WHERE = 'Argument 2 of seek must be an integer or a Text Node.';
+const E_WHERE = 'Argument of seek must be an integer or a Text Node.';
 
-const DOCUMENT_POSITION_PRECEDING = 2;
-const SHOW_TEXT = 4;
-const TEXT_NODE = 3;
+export class Seeker {
+  iter: NodeIterator;
 
-export default function seek(iter: NodeIterator, where: number | Text): number {
-  if (iter.whatToShow !== SHOW_TEXT) {
-    let error: Error & { code?: number };
+  constructor(scope: Range) {
+    const document = ownerDocument(scope);
+    this.iter = document.createNodeIterator(
+      scope.commonAncestorContainer,
+      NodeFilter.SHOW_TEXT,
+      {
+        acceptNode(node: Text) {
+          return scope.intersectsNode(node)
+            ? NodeFilter.FILTER_ACCEPT
+            : NodeFilter.FILTER_REJECT;
+        },
+      },
+    );
+  }
 
-    // istanbul ignore next
-    try {
-      error = new DOMException(E_SHOW, 'InvalidStateError');
-    } catch {
-      error = new Error(E_SHOW);
-      error.code = 11;
-      error.name = 'InvalidStateError';
-      error.toString = () => `InvalidStateError: ${E_SHOW}`;
+  getCurrentNode() {
+    return this.iter.referenceNode;
+  }
+
+  seek(where: number | Text): number {
+    const iter = this.iter;
+
+    let count = 0;
+    let node: Node | null = iter.referenceNode;
+    let predicates = null;
+
+    if (isInteger(where)) {
+      predicates = {
+        forward: () => count < where,
+        backward: () => count > where || !iter.pointerBeforeReferenceNode,
+      };
+    } else if (isText(where)) {
+      predicates = {
+        forward: before(node, where) ? () => false : () => node !== where,
+        backward: () => node !== where || !iter.pointerBeforeReferenceNode,
+      };
+    } else {
+      throw new TypeError(E_WHERE);
     }
 
-    throw error;
-  }
+    while (predicates.forward()) {
+      node = iter.nextNode();
 
-  let count = 0;
-  let node: Node | null = iter.referenceNode;
-  let predicates = null;
+      if (node === null) {
+        throw new RangeError(E_END);
+      }
 
-  if (isInteger(where)) {
-    predicates = {
-      forward: () => count < where,
-      backward: () => count > where || !iter.pointerBeforeReferenceNode,
-    };
-  } else if (isText(where)) {
-    predicates = {
-      forward: before(node, where) ? () => false : () => node !== where,
-      backward: () => node !== where || !iter.pointerBeforeReferenceNode,
-    };
-  } else {
-    throw new TypeError(E_WHERE);
-  }
+      count += (node as Text).data.length;
+    }
 
-  while (predicates.forward()) {
-    node = iter.nextNode();
+    if (iter.nextNode()) {
+      node = iter.previousNode();
+    }
 
-    if (node === null) {
+    while (predicates.backward()) {
+      node = iter.previousNode();
+
+      if (node === null) {
+        throw new RangeError(E_END);
+      }
+
+      count -= (node as Text).data.length;
+    }
+
+    if (!isText(iter.referenceNode)) {
       throw new RangeError(E_END);
     }
 
-    count += (node as Text).data.length;
+    return count;
   }
-
-  if (iter.nextNode()) {
-    node = iter.previousNode();
-  }
-
-  while (predicates.backward()) {
-    node = iter.previousNode();
-
-    if (node === null) {
-      throw new RangeError(E_END);
-    }
-
-    count -= (node as Text).data.length;
-  }
-
-  if (!isText(iter.referenceNode)) {
-    throw new RangeError(E_END);
-  }
-
-  return count;
 }
 
 function isInteger(n: any): n is number {
@@ -78,9 +84,9 @@ function isInteger(n: any): n is number {
 }
 
 function isText(node: Node): node is Text {
-  return node.nodeType === TEXT_NODE;
+  return node.nodeType === Node.TEXT_NODE;
 }
 
 function before(ref: Node, node: Node): boolean {
-  return !!(ref.compareDocumentPosition(node) & DOCUMENT_POSITION_PRECEDING);
+  return !!(ref.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_PRECEDING);
 }
