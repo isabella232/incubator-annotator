@@ -56,7 +56,15 @@ export class Seeker {
       count += (node as Text).data.length;
     }
 
+    // If there are subsequent nodes, move to ‘before’ the next non-empty
+    // node (or the last node, in case all subsequent nodes are empty).
+    // As this moves from ‘after’ the current node, count is not changed.
     if (iter.nextNode()) {
+      node = iter.referenceNode;
+      while (node !== null && (node as Text).data.length === 0) { // node should always be Text now due to the NodeFilter.
+        node = iter.nextNode();
+      }
+      // Note this direction switch stays within the same node.
       node = iter.previousNode();
     }
 
