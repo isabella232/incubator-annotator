@@ -27,51 +27,23 @@ export function createTextPositionSelectorMatcher(
 ): Matcher<Range, Range> {
   return async function* matchAll(scope) {
     const document = ownerDocument(scope);
-    const scopeText = scope.toString();
 
     const { start, end } = selector;
 
     const seeker = new Seeker(scope);
 
-    // The index of the first character of iter.referenceNode inside the text.
-    let referenceNodeIndex = isTextNode(scope.startContainer)
-      ? -scope.startOffset
-      : 0;
-
-    // String indices are based on code points, not code units, so we actually have to count.
-    const matchStartIndex = getIndexOfCharacterNumber(scopeText, start);
-    const matchEndIndex = getIndexOfCharacterNumber(scopeText, end);
-
     // Create a range to represent the described text in the dom.
     const match = document.createRange();
 
     // Seek to the start of the match, make the range start there.
-    referenceNodeIndex += seeker.seek(matchStartIndex - referenceNodeIndex);
-    match.setStart(seeker.getCurrentNode(), matchStartIndex - referenceNodeIndex);
+    seeker.seekTo(start);
+    match.setStart(seeker.referenceNode, seeker.referenceNodeIndex);
 
     // Seek to the end of the match, make the range end there.
-    referenceNodeIndex += seeker.seek(matchEndIndex - referenceNodeIndex);
-    match.setEnd(seeker.getCurrentNode(), matchEndIndex - referenceNodeIndex);
+    seeker.seekTo(end);
+    match.setEnd(seeker.referenceNode, seeker.referenceNodeIndex);
 
     // Yield the match.
     yield match;
   };
-}
-
-function isTextNode(node: Node): node is Text {
-  return node.nodeType === Node.TEXT_NODE;
-}
-
-function getIndexOfCharacterNumber(text: string, characterNumber: number): number {
-  let index = 0;
-  let characterCount = 0;
-  for (let character of text) {
-    if (characterCount >= characterNumber) // using >= to avoid infinite loop on invalid input.
-      break;
-    index += character.length; // note the length is either 1 or 2
-    characterCount++;
-  }
-  if (characterCount === characterNumber)
-    return index;
-  throw new RangeError;
 }

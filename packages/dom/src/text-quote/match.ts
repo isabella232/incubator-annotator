@@ -34,12 +34,15 @@ export function createTextQuoteSelectorMatcher(
     const suffix = selector.suffix || '';
     const searchPattern = prefix + exact + suffix;
 
-    const seeker = new Seeker(scope);
-
-    // The index of the first character of iter.referenceNode inside the text.
-    let referenceNodeIndex = isTextNode(scope.startContainer)
-      ? -scope.startOffset
-      : 0;
+    let seeker: Seeker;
+    try {
+      seeker = new Seeker(scope);
+    } catch (error) {
+      // If the scope does not contain text nodes, we can stop. (if it contains
+      // only empty text nodes we continue: it would still match an empty quote)
+      if (error instanceof RangeError) return;
+      else throw error;
+    }
 
     let fromIndex = 0;
     while (fromIndex <= scopeText.length) {
@@ -55,12 +58,12 @@ export function createTextQuoteSelectorMatcher(
       const match = document.createRange();
 
       // Seek to the start of the match, make the range start there.
-      referenceNodeIndex += seeker.seek(matchStartIndex - referenceNodeIndex);
-      match.setStart(seeker.getCurrentNode(), matchStartIndex - referenceNodeIndex);
+      seeker.seekTo(matchStartIndex);
+      match.setStart(seeker.referenceNode, seeker.offsetInReferenceNode);
 
       // Seek to the end of the match, make the range end there.
-      referenceNodeIndex += seeker.seek(matchEndIndex - referenceNodeIndex);
-      match.setEnd(seeker.getCurrentNode(), matchEndIndex - referenceNodeIndex);
+      seeker.seekTo(matchEndIndex);
+      match.setEnd(seeker.referenceNode, seeker.offsetInReferenceNode);
 
       // Yield the match.
       yield match;
@@ -69,8 +72,4 @@ export function createTextQuoteSelectorMatcher(
       fromIndex = matchStartIndex + 1;
     }
   };
-}
-
-function isTextNode(node: Node): node is Text {
-  return node.nodeType === Node.TEXT_NODE;
 }
