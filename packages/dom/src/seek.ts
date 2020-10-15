@@ -9,11 +9,14 @@ interface BoundaryPointer<T extends any = Node> {
 
 interface Chunker<T extends Iterable<any> = string> {
   read1(): T;
+  // read previous chunk?
 }
 
 interface Seeker<T extends Iterable<any> = string> extends Chunker<T> {
   readonly position: number;
-  read(length: number): T;
+  read(length: number, roundUp?: boolean): T;
+  readTo(target: number, roundUp?: boolean): T;
+  read1(length?: number): T;
   seekBy(length: number): void;
   seekTo(target: number): void;
 }
@@ -32,8 +35,7 @@ export class TextSeeker implements Seeker, BoundaryPointer<Text> {
   // The index of the first character of iter.referenceNode inside the text.
   private referenceNodePosition = 0;
 
-  // The current text position, i.e. the number of code units passed so far.
-  // position = 0;
+  // The current text position (measured in code units)
   get position() { return this.referenceNodePosition + this.offsetInReferenceNode; }
 
   private iter: NodeIterator;
@@ -65,12 +67,23 @@ export class TextSeeker implements Seeker, BoundaryPointer<Text> {
     this.seekTo(0);
   }
 
-  read(length: number) {
-    return this._readOrSeekTo(true, this.position + length);
+  read(length: number, roundUp: boolean = false) {
+    return this.readTo(this.position + length, roundUp);
   }
 
-  read1() {
-    return this._readOrSeekTo(true, this.position + 1, true);
+  readTo(target: number, roundUp: boolean = false) {
+    return this._readOrSeekTo(true, target, roundUp);
+  }
+
+  read1(length?: number) {
+    const chunk = this.read(1, true);
+    if (length !== undefined && chunk.length > length) {
+      // The chunk was larger than requested; walk back a little.
+      this.seekBy(length - chunk.length);
+      return chunk.substring(0, length);
+    } else {
+      return chunk;
+    }
   }
 
   seekBy(length: number) {
@@ -95,22 +108,22 @@ export class TextSeeker implements Seeker, BoundaryPointer<Text> {
         // The target is before the end of the current node.
         // (we use < not ≤: if the target is *at* the end of the node, possibly
         // because the current node is empty, we prefer to take the next node)
-        const oldOffset = this.offsetInReferenceNode;
-        this.offsetInReferenceNode = target - this.referenceNodePosition;
-        if (read) result += this.referenceNode.data.substring(oldOffset, this.offsetInReferenceNode);
+        const newOffset = target - this.referenceNodePosition;
+        if (read) result += this.referenceNode.data.substring(this.offsetInReferenceNode, newOffset);
+        this.offsetInReferenceNode = newOffset;
         break;
       }
 
       // Move to the start of the next node, while counting the characters of the current one.
       if (read) result += this.referenceNode.data.substring(this.offsetInReferenceNode);
-      const curNode = this.referenceNode;
+      const nodeLength = this.referenceNode.length;
       const nextNode = this.iter.nextNode();
       if (nextNode !== null) {
-        this.referenceNodePosition += curNode.length;
+        this.referenceNodePosition += nodeLength;
         this.offsetInReferenceNode = 0;
       } else {
         // There is no next node. Finish at the end of the last node.
-        this.offsetInReferenceNode = this.referenceNode.length;
+        this.offsetInReferenceNode = nodeLength;
         // Either the end of this node is our target, or the seek failed.
         if (this.position === target)
           break;
@@ -119,70 +132,99 @@ export class TextSeeker implements Seeker, BoundaryPointer<Text> {
       }
     }
 
-    if (read) return result;
-
     // Move to the start of the current node to prepare for moving backwards.
     if (!this.iter.pointerBeforeReferenceNode)
       this.iter.previousNode();
 
     while (this.position > target) {
-      if (this.referenceNodePosition <= target) {
-        this.offsetInReferenceNode = target - this.referenceNodePosition;
+      if (!roundUp && this.referenceNodePosition <= target) {
+        const newOffset = target - this.referenceNodePosition;
+        if (read) result = this.referenceNode.data.substring(newOffset, this.offsetInReferenceNode) + result;
+        this.offsetInReferenceNode = newOffset;
         break;
       }
 
       // Move to the end of the previous node.
+      if (read) result = this.referenceNode.data.substring(0, this.offsetInReferenceNode) + result;
       const prevNode = this.iter.previousNode();
       if (prevNode !== null) {
         this.referenceNodePosition -= this.referenceNode.length;
         this.offsetInReferenceNode = this.referenceNode.length;
-        //   this.codePointCount -= [...curNode.data].length;
       } else {
         this.offsetInReferenceNode = 0;
-        // this.codePointCount -= [...this.referenceNode.data.substring(0, oldOffset)].length;
-        throw new RangeError(E_END);
+        if (this.position === target)
+          break;
+        else
+          throw new RangeError(E_END);
       }
     }
+
+    if (read) return result;
   }
 }
 
 class _CharSeeker implements Seeker<string[]> {
   position = 0;
 
-  constructor(public readonly raw: Seeker<string>) {
-  }
+  constructor(public readonly raw: Seeker<string>) {}
 
   seekBy(length: number) {
     return this.seekTo(this.position + length);
   }
 
   seekTo(target: number) {
-    this._readOrSeekTo(target, false);
+    this._readOrSeekTo(false, target);
   }
 
-  read(length: number) {
-    return this._readOrSeekTo(this.position + length, true);
+  read(length: number, roundUp?: boolean) {
+    return this.readTo(this.position + length, roundUp);
   }
 
-  read1() {
-    const nextChunk = this.raw.read1();
-    const characters = [...nextChunk];
-    this.position += characters.length;
-    return characters;
+  readTo(target: number, roundUp?: boolean) {
+    return this._readOrSeekTo(true, target, roundUp);
   }
 
-  private _readOrSeekTo(target: number, read: true): string[];
-  private _readOrSeekTo(target: number, read: false): void;
-  private _readOrSeekTo(target: number, read: boolean): string[] | void {
+  read1(length?: number) {
+    const chunk = this.read(1, true);
+    if (length !== undefined && chunk.length > length) {
+      // The chunk was larger than requested; walk back a little.
+      this.seekBy(length - chunk.length);
+      return chunk.slice(0, length);
+    } else {
+      return chunk;
+    }
+  }
+
+  private _readOrSeekTo(read: true, target: number, roundUp?: boolean): string[];
+  private _readOrSeekTo(read: false, target: number, roundUp?: boolean): void;
+  private _readOrSeekTo(read: boolean, target: number, roundUp: boolean = false): string[] | void {
     let characters: string[] = [];
     let result: string[] = [];
-    while (this.position < target) {
-      characters = this.read1();
-      if (read) result = result.concat(characters);
+
+    if (this.position < target) {
+      while (this.position < target) {
+        characters = [...this.raw.read(1, true)];
+        this.position += characters.length;
+        if (read) result = result.concat(characters);
+      }
+      if (!roundUp) {
+        const overshootInCodePoints = this.position - target;
+        const overshootInCodeUnits = characters.slice(overshootInCodePoints).join('').length;
+        this.raw.seekBy(-overshootInCodeUnits);
+      }
+    } else {
+      while (this.position > target) {
+        characters = [...this.raw.read(-1, true)];
+        this.position -= characters.length;
+        if (read) result = characters.concat(result);
+      }
+      if (!roundUp) {
+        const overshootInCodePoints = target - this.position;
+        const overshootInCodeUnits = characters.slice(0, overshootInCodePoints).join('').length;
+        this.raw.seekBy(overshootInCodeUnits);
+      }
     }
-    const overshootInCodePoints = this.position - target;
-    const overshootInCodeUnits = characters.slice(overshootInCodePoints).join('').length;
-    this.raw.seekBy(-overshootInCodeUnits);
+
     if (read) return result;
   }
 }
