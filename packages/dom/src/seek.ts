@@ -12,18 +12,18 @@ interface TextBoundaryPointer extends BoundaryPointer{
   readonly offsetInReferenceNode: number;
 }
 
-interface Chunker {
-  read1(): string;
+interface Chunker<T extends Iterable<any>> {
+  read1(): T;
 }
 
-interface Seeker extends Chunker {
+interface Seeker<T extends Iterable<any>> extends Chunker<T> {
   readonly position: number;
-  read(length: number): string;
+  read(length: number): T;
   seekBy(length: number): void;
   seekTo(target: number): void;
 }
 
-export class Seeker_ implements Seeker, TextBoundaryPointer {
+export class Seeker_ implements Seeker<string>, TextBoundaryPointer {
   // The node containing our current text position.
   get referenceNode(): Text {
     // The NodeFilter will guarantee this is a Text node (except before the
@@ -177,8 +177,8 @@ function isText(node: Node): node is Text {
   return node.nodeType === Node.TEXT_NODE;
 }
 
-class CharSeeker implements Seeker, TextBoundaryPointer {
-  constructor(public readonly raw: Seeker & TextBoundaryPointer) {
+class CharSeeker implements Seeker<String[]>, TextBoundaryPointer {
+  constructor(public readonly raw: Seeker<String> & TextBoundaryPointer) {
   }
 
   position = 0;
@@ -201,25 +201,20 @@ class CharSeeker implements Seeker, TextBoundaryPointer {
   }
 
   read1() {
-    return this._read1().nextChunk;
-  }
-
-  private _read1() {
     const nextChunk = this.raw.read1();
     const characters = [...nextChunk];
     this.position += characters.length;
-    return { nextChunk, characters };
+    return characters;
   }
 
-  private _readOrSeekTo(target: number, read: true): string;
+  private _readOrSeekTo(target: number, read: true): string[];
   private _readOrSeekTo(target: number, read: false): void;
-  private _readOrSeekTo(target: number, read: boolean): string | void {
+  private _readOrSeekTo(target: number, read: boolean): string[] | void {
     let characters: string[] = [];
-    let result = '';
-    let nextChunk;
+    let result: string[] = [];
     while (this.position < target) {
-      ({ nextChunk, characters } = this._read1());
-      if (read) result += nextChunk;
+      characters = this.read1();
+      if (read) result = result.concat(characters);
     }
     const overshootInCodePoints = this.position - target;
     const overshootInCodeUnits = characters.slice(overshootInCodePoints).join('').length;
