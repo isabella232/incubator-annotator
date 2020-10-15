@@ -2,28 +2,23 @@ import { ownerDocument } from "./owner-document";
 
 const E_END = 'Iterator exhausted before seek ended.';
 
-interface BoundaryPointer {
-  readonly referenceNode: Node;
+interface BoundaryPointer<T extends any = Node> {
+  readonly referenceNode: T;
   readonly offsetInReferenceNode: number;
 }
 
-interface TextBoundaryPointer extends BoundaryPointer{
-  readonly referenceNode: Text;
-  readonly offsetInReferenceNode: number;
-}
-
-interface Chunker<T extends Iterable<any>> {
+interface Chunker<T extends Iterable<any> = string> {
   read1(): T;
 }
 
-interface Seeker<T extends Iterable<any>> extends Chunker<T> {
+interface Seeker<T extends Iterable<any> = string> extends Chunker<T> {
   readonly position: number;
   read(length: number): T;
   seekBy(length: number): void;
   seekTo(target: number): void;
 }
 
-export class Seeker_ implements Seeker<string>, TextBoundaryPointer {
+export class TextSeeker implements Seeker, BoundaryPointer<Text> {
   // The node containing our current text position.
   get referenceNode(): Text {
     // The NodeFilter will guarantee this is a Text node (except before the
@@ -35,26 +30,15 @@ export class Seeker_ implements Seeker<string>, TextBoundaryPointer {
   offsetInReferenceNode = 0;
 
   // The index of the first character of iter.referenceNode inside the text.
-  // get referenceNodePosition() { return this.position - this.offsetInReferenceNode; }
   private referenceNodePosition = 0;
 
   // The current text position, i.e. the number of code units passed so far.
   // position = 0;
   get position() { return this.referenceNodePosition + this.offsetInReferenceNode; }
 
-  // // The number of code points passed so far.
-  // codePointCount = 0;
-
   private iter: NodeIterator;
 
-  // // Counting code points is optional, to save the effort when it is not required.
-  // private countCodePoints: boolean;
-
-  constructor(scope: Range, options: {
-    // countCodePoints?: boolean
-  } = {}) {
-    // this.countCodePoints = options.countCodePoints ?? false;
-
+  constructor(scope: Range) {
     this.iter = ownerDocument(scope).createNodeIterator(
       scope.commonAncestorContainer,
       NodeFilter.SHOW_TEXT,
@@ -74,13 +58,12 @@ export class Seeker_ implements Seeker<string>, TextBoundaryPointer {
     }
     // TODO Handle the scope.endOffset as well, and fix behaviour in edge cases
     // (e.g. any use of referenceNode.length is incorrect at the edges).
+    // Or rather, just extract this Range stuff into a Chunker, that cuts off
+    // those edges that fall outside the scope.
 
     // Walk to the start of the first non-empty text node inside the scope.
     this.seekTo(0);
   }
-
-  // seekCodePoints(count: number) {
-  // }
 
   read(length: number) {
     return this._readOrSeekTo(true, this.position + length);
@@ -115,8 +98,6 @@ export class Seeker_ implements Seeker<string>, TextBoundaryPointer {
         const oldOffset = this.offsetInReferenceNode;
         this.offsetInReferenceNode = target - this.referenceNodePosition;
         if (read) result += this.referenceNode.data.substring(oldOffset, this.offsetInReferenceNode);
-        // if (this.countCodePoints)
-        //   this.codePointCount += [...this.referenceNode.data.substring(oldOffset, this.offsetInReferenceNode)].length;
         break;
       }
 
@@ -127,13 +108,9 @@ export class Seeker_ implements Seeker<string>, TextBoundaryPointer {
       if (nextNode !== null) {
         this.referenceNodePosition += curNode.length;
         this.offsetInReferenceNode = 0;
-        // if (this.countCodePoints)
-        //   this.codePointCount += [...curNode.data.substring(curOffset)].length;
       } else {
         // There is no next node. Finish at the end of the last node.
         this.offsetInReferenceNode = this.referenceNode.length;
-        // if (this.countCodePoints)
-        //   this.codePointCount += [...this.referenceNode.data.substring(this.offsetInReferenceNode)].length;
         // Either the end of this node is our target, or the seek failed.
         if (this.position === target)
           break;
@@ -151,18 +128,14 @@ export class Seeker_ implements Seeker<string>, TextBoundaryPointer {
     while (this.position > target) {
       if (this.referenceNodePosition <= target) {
         this.offsetInReferenceNode = target - this.referenceNodePosition;
-        // if (this.countCodePoints)
-        //   this.codePointCount -= [...this.referenceNode.data.substring(this.offsetInReferenceNode, oldOffset)].length;
         break;
       }
 
       // Move to the end of the previous node.
-      // const curNode = this.referenceNode;
       const prevNode = this.iter.previousNode();
       if (prevNode !== null) {
         this.referenceNodePosition -= this.referenceNode.length;
         this.offsetInReferenceNode = this.referenceNode.length;
-        // if (this.countCodePoints)
         //   this.codePointCount -= [...curNode.data].length;
       } else {
         this.offsetInReferenceNode = 0;
@@ -173,20 +146,11 @@ export class Seeker_ implements Seeker<string>, TextBoundaryPointer {
   }
 }
 
-function isText(node: Node): node is Text {
-  return node.nodeType === Node.TEXT_NODE;
-}
-
-class CharSeeker implements Seeker<String[]>, TextBoundaryPointer {
-  constructor(public readonly raw: Seeker<String> & TextBoundaryPointer) {
-  }
-
+class _CharSeeker implements Seeker<string[]> {
   position = 0;
-  get referenceNode() { return this.raw.referenceNode };
-  get offsetInReferenceNode() {
-    const substring = this.referenceNode.data.substring(0, this.raw.offsetInReferenceNode);
-    return [...substring].length;
-  };
+
+  constructor(public readonly raw: Seeker<string>) {
+  }
 
   seekBy(length: number) {
     return this.seekTo(this.position + length);
@@ -221,4 +185,20 @@ class CharSeeker implements Seeker<String[]>, TextBoundaryPointer {
     this.raw.seekBy(-overshootInCodeUnits);
     if (read) return result;
   }
+}
+
+export class CharSeeker extends _CharSeeker implements Seeker<string[]>, BoundaryPointer<string[]> {
+  constructor(public readonly raw: Seeker<string> & BoundaryPointer<Text>) {
+    super(raw);
+  }
+
+  get referenceNode() { return [...this.raw.referenceNode.data] };
+  get offsetInReferenceNode() {
+    const substring = this.raw.referenceNode.data.substring(0, this.raw.offsetInReferenceNode);
+    return [...substring].length;
+  };
+}
+
+function isText(node: Node): node is Text {
+  return node.nodeType === Node.TEXT_NODE;
 }
