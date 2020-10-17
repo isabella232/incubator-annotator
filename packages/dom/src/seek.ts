@@ -202,22 +202,40 @@ class _CharSeeker implements Seeker<string[]> {
     let result: string[] = [];
 
     if (this.position < target) {
+      let unpairedSurrogate = '';
       while (this.position < target) {
-        characters = [...this.raw.read(1, true)];
+        let s = unpairedSurrogate + this.raw.read(1, true);
+        if (endsWithinCharacter(s)) {
+          unpairedSurrogate = s.slice(-1); // consider this half-character part of the next string.
+          s = s.slice(0,-1);
+        } else {
+          unpairedSurrogate = '';
+        }
+        characters = [...s];
         this.position += characters.length;
         if (read) result = result.concat(characters);
       }
+      if (unpairedSurrogate) this.raw.seekBy(-1); // align with the last complete character.
       if (!roundUp) {
         const overshootInCodePoints = this.position - target;
         const overshootInCodeUnits = characters.slice(overshootInCodePoints).join('').length;
         this.raw.seekBy(-overshootInCodeUnits);
       }
     } else {
+      let unpairedSurrogate = '';
       while (this.position > target) {
-        characters = [...this.raw.read(-1, true)];
+        let s = this.raw.read(-1, true) + unpairedSurrogate;
+        if (startsWithinCharacter(s)) {
+          unpairedSurrogate = s[0];
+          s = s.slice(1);
+        } else {
+          unpairedSurrogate = '';
+        }
+        characters = [...s];
         this.position -= characters.length;
         if (read) result = characters.concat(result);
       }
+      if (unpairedSurrogate) this.raw.seekBy(1);
       if (!roundUp) {
         const overshootInCodePoints = target - this.position;
         const overshootInCodeUnits = characters.slice(0, overshootInCodePoints).join('').length;
@@ -243,4 +261,14 @@ export class CharSeeker extends _CharSeeker implements Seeker<string[]>, Boundar
 
 function isText(node: Node): node is Text {
   return node.nodeType === Node.TEXT_NODE;
+}
+
+function endsWithinCharacter(s: string) {
+  const codeUnit = s.charCodeAt(s.length - 1);
+  return (0xD800 <= codeUnit && codeUnit <= 0xDBFF)
+}
+
+function startsWithinCharacter(s: string) {
+  const codeUnit = s.charCodeAt(0);
+  return (0xDC00 <= codeUnit && codeUnit <= 0xDFFF)
 }
