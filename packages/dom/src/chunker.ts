@@ -73,7 +73,9 @@ export class TextNodeChunker implements Chunker<PartialTextNode> {
       },
     );
 
-    this.iter.nextNode(); // TODO choose how to handle a range without text nodes.
+    if (this.iter.nextNode() === null) {
+      throw new RangeError('Range does not contain any Text nodes.');
+    }
   }
 
   readNext() {
