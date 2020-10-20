@@ -30,7 +30,8 @@ export interface Chunk<TData extends any> {
 }
 
 export interface Chunker<TChunk extends Chunk<any>> {
-  readonly currentChunk: TChunk;
+  // currentChunk is null only if it contains no chunks at all.
+  readonly currentChunk: TChunk | null;
   readNext(): TChunk | null;
   readPrev(): TChunk | null;
   // read(length?: 1 | -1, roundUp?: true): TChunk | null;
@@ -47,9 +48,9 @@ export class TextNodeChunker implements Chunker<PartialTextNode> {
   private iter: NodeIterator;
 
   get currentChunk() {
-    // The NodeFilter will guarantee this is a Text node (except before the
-    // first iteration step, but we do such a step in the constructor).
-    const node = this.iter.referenceNode as Text;
+    const node = this.iter.referenceNode;
+    if (!isText(node))
+      return null;
     const startOffset = (node === this.scope.startContainer) ? this.scope.startOffset : 0;
     const endOffset = (node === this.scope.endContainer) ? this.scope.endOffset : node.length;
     return {
@@ -73,9 +74,11 @@ export class TextNodeChunker implements Chunker<PartialTextNode> {
       },
     );
 
-    if (this.iter.nextNode() === null) {
-      throw new RangeError('Range does not contain any Text nodes.');
-    }
+    // Move the iterator to after the start (= root) node.
+    this.iter.nextNode();
+    // If the start node is not a text node, move it to the first text node (if any).
+    if (!isText(this.iter.referenceNode))
+      this.iter.nextNode();
   }
 
   readNext() {
@@ -96,4 +99,8 @@ export class TextNodeChunker implements Chunker<PartialTextNode> {
     else
       return null;
   }
+}
+
+function isText(node: Node): node is Text {
+  return node.nodeType === Node.TEXT_NODE;
 }
