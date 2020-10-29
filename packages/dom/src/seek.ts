@@ -37,7 +37,6 @@ export interface Seeker<T extends Iterable<any> = string> {
   readonly position: number;
   read(length?: number, roundUp?: boolean): T;
   readTo(target: number, roundUp?: boolean): T;
-  // read1(length?: number): T;
   seekBy(length: number): void;
   seekTo(target: number): void;
 }
@@ -63,17 +62,6 @@ class _TextSeeker<TChunk extends Chunk<string>> implements Seeker<string> {
 
   readTo(target: number, roundUp: boolean = false) {
     return this._readOrSeekTo(true, target, roundUp);
-  }
-
-  read1(length?: number) {
-    const chunk = this.read(1, true);
-    if (length !== undefined && chunk.length > length) {
-      // The chunk was larger than requested; walk back a little.
-      this.seekBy(length - chunk.length);
-      return chunk.substring(0, length);
-    } else {
-      return chunk;
-    }
   }
 
   seekBy(length: number) {
