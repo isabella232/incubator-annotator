@@ -24,8 +24,8 @@ const E_END = 'Iterator exhausted before seek ended.';
 
 interface NonEmptyChunker<TChunk extends Chunk<any>> {
   readonly currentChunk: TChunk;
-  readNext(): TChunk | null;
-  readPrev(): TChunk | null;
+  nextChunk(): TChunk | null;
+  previousChunk(): TChunk | null;
 }
 
 export interface BoundaryPointer<T extends any> {
@@ -91,11 +91,11 @@ class _TextSeeker<TChunk extends Chunk<string>> implements Seeker<string> {
           // Move to the start of the next chunk, while counting the characters of the current one.
           if (read) result += this.chunker.currentChunk.data.substring(this.offsetInChunk);
           const chunkLength = this.chunker.currentChunk.data.length;
-          let nextChunk = this.chunker.readNext();
+          let nextChunk = this.chunker.nextChunk();
           if (nextChunk !== null) {
             // Skip empty chunks.
             while (nextChunk && nextChunk.data.length === 0)
-              nextChunk = this.chunker.readNext();
+              nextChunk = this.chunker.nextChunk();
             this.currentChunkPosition += chunkLength;
             this.offsetInChunk = 0;
           } else {
@@ -121,8 +121,8 @@ class _TextSeeker<TChunk extends Chunk<string>> implements Seeker<string> {
         } else {
           // Move to the end of the previous chunk.
           if (read) result = this.chunker.currentChunk.data.substring(0, this.offsetInChunk) + result;
-          const prevChunk = this.chunker.readPrev();
-          if (prevChunk !== null) {
+          const previousChunk = this.chunker.previousChunk();
+          if (previousChunk !== null) {
             this.currentChunkPosition -= this.chunker.currentChunk.data.length;
             this.offsetInChunk = this.chunker.currentChunk.data.length;
           } else {
