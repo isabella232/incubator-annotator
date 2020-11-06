@@ -18,11 +18,11 @@
  * under the License.
  */
 
-import { Chunk, TextNodeChunker, PartialTextNode } from "./chunker";
+import { Chunk, Chunker, TextNodeChunker, PartialTextNode, chunkEquals } from "./chunker";
 
 const E_END = 'Iterator exhausted before seek ended.';
 
-interface NonEmptyChunker<TChunk extends Chunk<any>> {
+export interface NonEmptyChunker<TChunk extends Chunk<any>> {
   readonly currentChunk: TChunk;
   nextChunk(): TChunk | null;
   previousChunk(): TChunk | null;
@@ -75,6 +75,28 @@ export class TextSeeker<TChunk extends Chunk<string>> implements Seeker<string> 
 
   seekTo(target: number) {
     this._readOrSeekTo(false, target);
+  }
+
+  seekToChunk(target: TChunk, offset: number = 0) {
+    this._readOrSeekToChunk(false, target, offset);
+  }
+
+  readToChunk(target: TChunk, offset: number = 0): string {
+    return this._readOrSeekToChunk(true, target, offset);
+  }
+
+  private _readOrSeekToChunk(read: true, target: TChunk, offset?: number): string
+  private _readOrSeekToChunk(read: false, target: TChunk, offset?: number): void
+  private _readOrSeekToChunk(read: boolean, target: TChunk, offset: number = 0): string {
+    // XXX We have no way of knowing whether a chunk will follow or precedes the current chunk; we assume it follows.
+    let result = '';
+    // This will throw a RangeError if we reach the end without encountering the target chunk.
+    while (!chunkEquals(this.currentChunk, target)) {
+      if (read) result += this.read(1, true);
+    }
+    if (offset > this.offsetInChunk)
+      result += this.read(offset - this.offsetInChunk);
+    return result;
   }
 
   private _readOrSeekTo(read: true, target: number, roundUp?: boolean): string
@@ -142,10 +164,11 @@ export class TextSeeker<TChunk extends Chunk<string>> implements Seeker<string> 
   }
 }
 
-
 export class DomSeeker extends TextSeeker<PartialTextNode> implements BoundaryPointer<Text> {
-  constructor(scope: Range) {
-    const chunker = new TextNodeChunker(scope);
+  constructor(chunkerOrScope: Chunker<PartialTextNode> | Range) {
+    const chunker = isTextNodeChunker(chunkerOrScope)
+      ? chunkerOrScope
+      : new TextNodeChunker(chunkerOrScope);
     if (chunker.currentChunk === null)
       throw new RangeError('Range does not contain any Text nodes.');
     super(chunker as NonEmptyChunker<PartialTextNode>);
@@ -158,4 +181,21 @@ export class DomSeeker extends TextSeeker<PartialTextNode> implements BoundaryPo
   get offsetInReferenceNode() {
     return this.offsetInChunk + this.currentChunk.startOffset;
   }
+
+  seekToBoundaryPoint(node: Node, offset: number) {
+    const document = (node.ownerDocument ?? node as Document);
+    const target = document.createRange();
+    target.setStart(node, offset);
+    // target.setEnd(node, offset); // (implied by setting the start)
+
+    // Seek step by step until we are at, or crossed, the target point.
+    const reverse = !!(node.compareDocumentPosition(this.referenceNode) & Node.DOCUMENT_POSITION_PRECEDING);
+    while (target.comparePoint(this.referenceNode, this.offsetInReferenceNode) === (reverse ? 1 : -1)) {
+      this.seekBy(reverse ? -1 : 1);
+    }
+  }
+}
+
+function isTextNodeChunker(obj: any): obj is Chunker<PartialTextNode> {
+  return ('currentChunk' in obj && 'nextChunk' in obj && 'previousChunk' in obj);
 }

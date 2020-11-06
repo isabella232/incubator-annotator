@@ -20,7 +20,9 @@
 
 import type { TextQuoteSelector } from '@annotator/selector';
 import { ownerDocument } from '../owner-document';
-import { Seeker } from '../seek';
+import { Chunk, Chunker, ChunkRange, PartialTextNode, TextNodeChunker, chunkRangeEquals } from '../chunker';
+import { abstractTextQuoteSelectorMatcher } from '.';
+import { DomSeeker, TextSeeker, NonEmptyChunker } from '../seek';
 
 export async function describeTextQuote(
   range: Range,
@@ -32,120 +34,97 @@ export async function describeTextQuote(
     scope = document.createRange();
     scope.selectNodeContents(document);
   }
-  range = range.cloneRange();
+
+  const chunker = new TextNodeChunker(scope);
 
   // Take the part of the range that falls within the scope.
+  range = range.cloneRange();
   if (range.compareBoundaryPoints(Range.START_TO_START, scope) === -1)
     range.setStart(scope.startContainer, scope.startOffset);
   if (range.compareBoundaryPoints(Range.END_TO_END, scope) === 1)
     range.setEnd(scope.endContainer, scope.endOffset);
 
-  return {
-    type: 'TextQuoteSelector',
-    exact: range.toString(),
-    ...calculateContextForDisambiguation(range, scope),
-  };
+  return await abstractDescribeTextQuote(
+    convertRangeToChunkRange(chunker, range),
+    chunker,
+  );
 }
 
-function calculateContextForDisambiguation(
-  range: Range,
-  scope: Range,
-): { prefix: string; suffix: string } {
-  const exactText = range.toString();
-  const scopeText = scope.toString();
-  const targetStartIndex = getRangeTextPosition(range, scope);
-  const targetEndIndex = targetStartIndex + exactText.length;
+async function abstractDescribeTextQuote<TChunk extends Chunk<string>>(
+  target: ChunkRange<TChunk>,
+  scope: Chunker<TChunk>,
+): Promise<TextQuoteSelector> {
+  const seeker = new TextSeeker(scope as NonEmptyChunker<TChunk>);
+  seeker.seekToChunk(target.startChunk, target.startIndex);
+  const exact = seeker.readToChunk(target.endChunk, target.endIndex);
 
   // Starting with an empty prefix and suffix, we search for matches. At each unintended match
   // we encounter, we extend the prefix or suffix just enough to ensure it will no longer match.
   let prefix = '';
   let suffix = '';
-  let fromIndex = 0;
-  while (fromIndex <= scopeText.length) {
-    const searchPattern = prefix + exactText + suffix;
-    const patternMatchIndex = scopeText.indexOf(searchPattern, fromIndex);
-    if (patternMatchIndex === -1) break;
-    fromIndex = patternMatchIndex + 1;
 
-    const matchStartIndex = patternMatchIndex + prefix.length;
-    const matchEndIndex = matchStartIndex + exactText.length;
+  while (true) {
+    const tentativeSelector: TextQuoteSelector = {
+      type: 'TextQuoteSelector',
+      exact,
+      prefix,
+      suffix,
+    }
+    const matches = abstractTextQuoteSelectorMatcher(tentativeSelector)(scope);
+    let nextMatch = await matches.next();
 
-    // Skip the found match if it is the actual target.
-    if (matchStartIndex === targetStartIndex) continue;
+    if (!nextMatch.done && chunkRangeEquals(nextMatch.value, target)) {
+      // This match is the intended one, ignore it.
+      nextMatch = await matches.next();
+    }
+
+    // If there are no more unintended matches, our selector is unambiguous!
+    if (nextMatch.done) return tentativeSelector;
+
+    // TODO either reset chunker to start from the beginning, or rewind the chunker by previous match’s length.
+    // chunker.seekTo(0)  or chunker.seek(-prefix)
+
+    // We’ll have to add more prefix/suffix to disqualify this unintended match.
+    const unintendedMatch = nextMatch.value;
+    const seeker1 = new TextSeeker(scope as NonEmptyChunker<TChunk>);
+    const seeker2 = new TextSeeker(scope as NonEmptyChunker<TChunk>); // TODO must clone scope.
 
     // Count how many characters we’d need as a prefix to disqualify this match.
-    let sufficientPrefixLength = prefix.length + 1;
-    const firstChar = (offset: number) =>
-      scopeText[offset - sufficientPrefixLength];
-    while (
-      firstChar(targetStartIndex) &&
-      firstChar(targetStartIndex) === firstChar(matchStartIndex)
-    )
-      sufficientPrefixLength++;
-    if (!firstChar(targetStartIndex))
-      // We reached the start of scopeText; prefix won’t work.
-      sufficientPrefixLength = Infinity;
-
-    // Count how many characters we’d need as a suffix to disqualify this match.
-    let sufficientSuffixLength = suffix.length + 1;
-    const lastChar = (offset: number) =>
-      scopeText[offset + sufficientSuffixLength - 1];
-    while (
-      lastChar(targetEndIndex) &&
-      lastChar(targetEndIndex) === lastChar(matchEndIndex)
-    )
-      sufficientSuffixLength++;
-    if (!lastChar(targetEndIndex))
-      // We reached the end of scopeText; suffix won’t work.
-      sufficientSuffixLength = Infinity;
+    seeker1.seekToChunk(target.startChunk, target.startIndex);
+    seeker2.seekToChunk(unintendedMatch.startChunk, unintendedMatch.startIndex);
+    let sufficientPrefix: string | undefined = prefix;
+    while (true) {
+      let previousCharacter: string;
+      try {
+        previousCharacter = seeker1.read(-1);
+      } catch (err) {
+        sufficientPrefix = undefined; // Start of text reached.
+        break;
+      }
+      sufficientPrefix = previousCharacter + sufficientPrefix;
+      if (previousCharacter !== seeker2.read(-1)) break;
+    }
 
     // Use either the prefix or suffix, whichever is shortest.
-    if (sufficientPrefixLength <= sufficientSuffixLength) {
-      // Compensate our search position for the increase in prefix length.
-      fromIndex -= sufficientPrefixLength - prefix.length;
-      prefix = scopeText.substring(
-        targetStartIndex - sufficientPrefixLength,
-        targetStartIndex,
-      );
-    } else {
-      suffix = scopeText.substring(
-        targetEndIndex,
-        targetEndIndex + sufficientSuffixLength,
-      );
-    }
+    if (sufficientPrefix !== undefined && (sufficientSuffix === undefined || sufficientPrefix.length <= sufficientSuffix.length))
+      prefix = sufficientPrefix; // chunker.seek(prefix.length - sufficientPrefix.length)
+    else if (sufficientSuffix !== undefined)
+      suffix = sufficientSuffix;
+    else
+      throw new Error('Target cannot be disambiguated; how could that have happened‽');
   }
-
-  return { prefix, suffix };
 }
 
-// Get the index of the first character of range within the text of scope.
-function getRangeTextPosition(range: Range, scope: Range): number {
-  const seeker = new Seeker(scope);
-  const scopeOffset = isTextNode(scope.startContainer) ? scope.startOffset : 0;
-  if (isTextNode(range.startContainer))
-    return seeker.seek(range.startContainer) + range.startOffset - scopeOffset;
-  else return seeker.seek(firstTextNodeInRange(range)) - scopeOffset;
-}
+function convertRangeToChunkRange(chunker: Chunker<PartialTextNode>, range: Range): ChunkRange<PartialTextNode> {
+  const domSeeker = new DomSeeker(chunker);
 
-function firstTextNodeInRange(range: Range): Text {
-  // Find the first text node inside the range.
-  const iter = ownerDocument(range).createNodeIterator(
-    range.commonAncestorContainer,
-    NodeFilter.SHOW_TEXT,
-    {
-      acceptNode(node: Text) {
-        // Only reveal nodes within the range; and skip any empty text nodes.
-        return range.intersectsNode(node) && node.length > 0
-          ? NodeFilter.FILTER_ACCEPT
-          : NodeFilter.FILTER_REJECT;
-      },
-    },
-  );
-  const node = iter.nextNode() as Text | null;
-  if (node === null) throw new Error('Range contains no text nodes');
-  return node;
-}
+  domSeeker.seekToBoundaryPoint(range.startContainer, range.startOffset);
+  const startChunk = domSeeker.currentChunk;
+  const startIndex = domSeeker.offsetInChunk;
 
-function isTextNode(node: Node): node is Text {
-  return node.nodeType === Node.TEXT_NODE;
+  domSeeker.seekToBoundaryPoint(range.endContainer, range.endOffset);
+  const endChunk = domSeeker.currentChunk;
+  const endIndex = domSeeker.offsetInChunk;
+
+  return { startChunk, startIndex, endChunk, endIndex };
 }
